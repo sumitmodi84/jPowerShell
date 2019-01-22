@@ -331,7 +331,7 @@ public class PowerShell implements AutoCloseable {
             File tmpFile = createWriteTempFile(srcReader);
             if (tmpFile != null) {
                 this.scriptMode = true;
-                response = executeCommand(tmpFile.getAbsolutePath() + " " + params);
+                response = executeCommand(" & '" +tmpFile.getAbsolutePath() + "'"  + " " + params);
                 tmpFile.delete();
             } else {
                 response = new PowerShellResponse(true, "Cannot create temp script file!", false);
