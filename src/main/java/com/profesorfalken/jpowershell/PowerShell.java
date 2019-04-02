@@ -15,11 +15,25 @@
  */
 package com.profesorfalken.jpowershell;
 
-import java.io.*;
+import java.io.BufferedOutputStream;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
 import java.nio.charset.Charset;
 import java.util.Date;
 import java.util.Map;
-import java.util.concurrent.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -61,6 +75,8 @@ public class PowerShell implements AutoCloseable {
     // Variables used for script mode
     private boolean scriptMode = false;
     public static final String END_SCRIPT_STRING = "--END-JPOWERSHELL-SCRIPT--";
+    
+    private boolean interruptException = false;
 
     // Private constructor. Instance using openSession method
     private PowerShell() {
@@ -154,6 +170,21 @@ public class PowerShell implements AutoCloseable {
                         "Cannot execute PowerShell. Please make sure that it is installed in your system. Errorcode:" + p.exitValue());
             }
         } catch (IOException | InterruptedException ex) {
+        	if(ex instanceof InterruptedException) {
+        		interruptException = true;
+        		//Try to close the currently running powershell
+        		if(p!=null) {
+        	        //Prepare writer that will be used to send commands to powershell
+        	        this.commandWriter = new PrintWriter(new OutputStreamWriter(new BufferedOutputStream(p.getOutputStream())), true);
+
+        	        // Init thread pool. 2 threads are needed: one to write and read console and the other to close it
+        	        this.threadpool = Executors.newFixedThreadPool(2);
+
+        	        //Get and store the PID of the process
+        	        this.pid = Long.valueOf(executeCommand("$pid").getCommandOutput());
+        	        this.close();
+        		}
+        	}
             throw new PowerShellNotAvailableException(
                     "Cannot execute PowerShell. Please make sure that it is installed in your system", ex);
         }
@@ -208,6 +239,9 @@ public class PowerShell implements AutoCloseable {
             logger.log(Level.SEVERE,
                     "Unexpected error when processing PowerShell command", ex);
             isError = true;
+           	if(ex instanceof InterruptedException) {
+        		interruptException = true;
+        	}
         } finally {
             // issue #2. Close and cancel processors/threads - Thanks to r4lly
             // for helping me here
@@ -330,9 +364,15 @@ public class PowerShell implements AutoCloseable {
         if (srcReader != null) {
             File tmpFile = createWriteTempFile(srcReader);
             if (tmpFile != null) {
-                this.scriptMode = true;
-                response = executeCommand(" & '" +tmpFile.getAbsolutePath() + "'"  + " " + params);
-                tmpFile.delete();
+            	try
+            	{
+	                this.scriptMode = true;
+	                response = executeCommand(" & '" +tmpFile.getAbsolutePath() + "'"  + " " + params);
+            	}
+            	finally
+            	{
+            		tmpFile.delete();
+            	}
             } else {
                 response = new PowerShellResponse(true, "Cannot create temp script file!", false);
             }
@@ -409,6 +449,9 @@ public class PowerShell implements AutoCloseable {
             } catch (InterruptedException | ExecutionException ex) {
                 logger.log(Level.SEVERE,
                         "Unexpected error when when closing PowerShell", ex);
+               	if(ex instanceof InterruptedException) {
+            		interruptException = true;
+            	}
             } finally {
                 commandWriter.close();
                 try {
@@ -426,6 +469,8 @@ public class PowerShell implements AutoCloseable {
                     } catch (InterruptedException ex) {
                         logger.log(Level.SEVERE,
                                 "Unexpected error when when shutting down thread pool", ex);
+                   		interruptException = true;
+                    	
                     }
 
                 }
@@ -455,5 +500,20 @@ public class PowerShell implements AutoCloseable {
         if (this.closed) {
             throw new IllegalStateException("PowerShell is already closes. Please open a new session.");
         }
+    }
+    
+    public boolean isPowershellAlive() {
+    	if(p != null) {
+    		return p.isAlive();
+    	}
+    	return false;
+    }
+    
+    public boolean isInterruptException() {
+    	return interruptException;
+    }
+    
+    public void restInterruptException() {
+    	 interruptException = false;
     }
 }
